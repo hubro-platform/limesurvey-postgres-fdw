@@ -43,8 +43,7 @@ impl FhirFdw {
 
     fn page_size(&self) -> usize {
         match self.object.as_str() {
-            "transactions" => 30,
-            "adjustments" => 50,
+            "Observation" => 20,
             _ => 200,
         }
     }
@@ -56,11 +55,88 @@ impl FhirFdw {
             return Ok(Some(Cell::Json(src_row.to_string())));
         }
 
-        let src = src_row
-            .as_object()
-            .and_then(|v| v.get(&tgt_col_name))
-            .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+        let mut src = &Default::default();
 
+        match tgt_col_name.as_str() {
+            "effectiveStart" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| {
+                        v.get("effectiveDateTime")
+                            .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
+                    })
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "effectiveEnd" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("effectivePeriod"))
+                    .and_then(|v| v.get("end"))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "subject" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("subject"))
+                    .and_then(|v| v.get("reference"))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "loincCode" => {
+                if let Some(coding_array) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("code"))
+                    .and_then(|v| v.get("coding"))
+                    .and_then(|v| v.as_array())
+                {
+                    for coding in coding_array {
+                        if let Some(system) = coding.get("system") {
+                            if system == "http://loinc.org" {
+                                src = coding.get("code").ok_or(format!(
+                                    "Cannot extract 'code' when 'system' is 'http://loinc.org'"
+                                ))?;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            "value" => {
+                if let Some(quantity) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("valueQuantity"))
+                {
+                    src = quantity.get("value").ok_or(format!(
+                        "Cannot extract 'value' from 'valueQuantity' for column '{}'",
+                        tgt_col_name
+                    ))?;
+                }
+            }
+            "unit" => {
+                if let Some(quantity) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("valueQuantity"))
+                {
+                    src = quantity.get("unit").ok_or(format!(
+                        "Cannot extract 'unit' from 'valueQuantity' for column '{}'",
+                        tgt_col_name
+                    ))?;
+                }
+            }
+            _ => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get(&tgt_col_name))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+        }
+        
         let cell = match tgt_col.type_oid() {
             TypeOid::Bool => src.as_bool().map(Cell::Bool),
             TypeOid::I8 => src.as_i64().map(|v| Cell::I8(v as i8)),
@@ -122,7 +198,7 @@ impl FhirFdw {
                     }
                 })
                 .unwrap_or_else(|| self.object.clone());
-            format!("{}/{}?per_page={}", self.base_url, object, self.page_size())
+            format!("{}/{}?_count={}", self.base_url, object, self.page_size())
         };
         let req = http::Request {
             method: http::Method::Get,
@@ -134,20 +210,20 @@ impl FhirFdw {
         let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
 
         // if the 404 is caused by no object found, we shouldn't take it as an error
-        if resp.status_code == 404 && resp_json.pointer("/error/code") == Some(&json!("not_found"))
-        {
-            self.src_rows = Vec::default();
-            self.src_idx = 0;
-            self.url = None;
-            return Ok(());
-        }
+        // if resp.status_code == 404 && resp_json.pointer("/error/code") == Some(&json!("not_found"))
+        // {
+        //     self.src_rows = Vec::default();
+        //     self.src_idx = 0;
+        //     self.url = None;
+        //     return Ok(());
+        // }
 
         http::error_for_status(&resp).map_err(|err| format!("{}: {}", err, resp.body))?;
 
         // save source rows
         self.src_rows = resp_json
             .as_object()
-            .and_then(|v| v.get("data"))
+            .and_then(|v| v.get("entry"))
             .and_then(|v| {
                 // convert a single object response to an array
                 if v.is_object() {
@@ -159,22 +235,21 @@ impl FhirFdw {
             .ok_or("cannot get query result data")?;
         self.src_idx = 0;
 
-        // deal with pagination to save next page url
-        let pagination = resp_json
-            .pointer("/meta/pagination")
-            .and_then(|v| v.as_object());
-        let has_more = pagination
-            .and_then(|v| v.get("has_more"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or_default();
-        self.url = if has_more {
-            pagination
-                .and_then(|v| v.get("next"))
-                .and_then(|v| v.as_str())
-                .map(|v| v.to_owned())
-        } else {
-            None
-        };
+        let pagination = resp_json.pointer("/link").and_then(|v| v.as_array());
+
+        if let Some(next_link) = pagination.and_then(|array| {
+            array.iter().find_map(|item| {
+                if item.get("relation").and_then(|r| r.as_str()) == Some("next") {
+                    item.get("url")
+                        .and_then(|href| href.as_str())
+                        .map(|href| href.to_owned())
+                } else {
+                    None
+                }
+            })
+        }) {
+            self.url = Some(next_link)
+        }
 
         Ok(())
     }
@@ -192,7 +267,7 @@ impl Guest for FhirFdw {
         let this = Self::this_mut();
 
         let opts = ctx.get_options(OptionsType::Server);
-        this.base_url = opts.require_or("api_url", "https://hapi.fhir.org/baseR4");
+        this.base_url = opts.require_or("fhir_url", "https://hapi.fhir.org/baseR4");
         let api_key = match opts.get("api_key") {
             Some(key) => key,
             None => {
@@ -220,14 +295,11 @@ impl Guest for FhirFdw {
         Ok(())
     }
 
-
-
     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
         let this = Self::this_mut();
 
         // if all local rows are consumed
         if this.src_idx >= this.src_rows.len() {
-
             // if no more pages, stop the iter scan
             if this.url.is_none() {
                 return Ok(None);
