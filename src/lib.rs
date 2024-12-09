@@ -277,7 +277,7 @@ impl Guest for FhirFdw {
         // };
 
         this.headers
-            .push(("Content-Type".to_owned(), "application/json".to_string()));
+            .push(("content-type".to_owned(), "application/json".to_string()));
         // this.headers
         //     .push(("authorization".to_owned(), format!("Bearer {}", api_key)));
 
