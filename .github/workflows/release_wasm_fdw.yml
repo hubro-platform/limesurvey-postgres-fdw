@@ -30,6 +30,8 @@ jobs:
 
           # install Wasm component
           cargo install cargo-component --locked --version 0.13.2
+          
+          rustup component add rustfmt
 
       - name: Build Wasm FDW
         run: |
