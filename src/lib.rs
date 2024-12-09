@@ -410,23 +410,18 @@ impl FhirFdw {
 
         match tgt_col_name.as_str() {
             "effectivestart" => {
-                if let Some(start) = src_row
+                src = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
-                    .and_then(|v| {
-                        v.get("effectiveDateTime")
-                            .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
-                    })
-                {
-                    src = start
-                }
+                    .and_then(|v| v.get("effectiveDateTime"))
+                    .ok_or_else(|| "")?;
             }
             "effectiveend" => {
-                if let Some(end) = src_row.as_object().and_then(|v| v.get("resource")) {
-                    src = end
-                        .get("effectiveDateTime")
-                        .ok_or(format!("Cannot extract 'effectiveDateTime'"))?;
-                }
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("effectiveDateTime"))
+                    .ok_or_else(|| "")?;
             }
             "subject" => {
                 src = src_row
