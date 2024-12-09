@@ -410,23 +410,23 @@ impl FhirFdw {
 
         match tgt_col_name.as_str() {
             "effectivestart" => {
-                if let Some(coding_array) = src_row
+                if let Some(start) = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
                     .and_then(|v| {
                         v.get("effectiveDateTime")
                             .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
-                    }){
-                    src = coding_array
+                    })
+                {
+                    src = start
                 }
             }
             "effectiveend" => {
-                src = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("effectivePeriod"))
-                    .and_then(|v| v.get("end"))
-                    .unwrap_or(&JsonValue::Null);
+                if let Some(end) = src_row.as_object().and_then(|v| v.get("resource")) {
+                    src = end
+                        .get("effectiveDateTime")
+                        .ok_or(format!("Cannot extract 'effectiveDateTime'"))?;
+                }
             }
             "subject" => {
                 src = src_row
