@@ -410,14 +410,15 @@ impl FhirFdw {
 
         match tgt_col_name.as_str() {
             "effectivestart" => {
-                src = src_row
+                if let Some(coding_array) = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
                     .and_then(|v| {
                         v.get("effectiveDateTime")
                             .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
-                    })
-                    .unwrap_or(&JsonValue::Null);
+                    }){
+                    src = coding_array
+                }
             }
             "effectiveend" => {
                 src = src_row
@@ -515,10 +516,6 @@ impl FhirFdw {
             }
         }
 
-        if (src == &JsonValue::Null) {
-            return Ok(None);
-        }
-
         let cell = match tgt_col.type_oid() {
             TypeOid::Bool => src.as_bool().map(Cell::Bool),
             TypeOid::I8 => src.as_i64().map(|v| Cell::I8(v as i8)),
@@ -561,7 +558,7 @@ impl FhirFdw {
 
     fn make_request(&mut self, ctx: &Context) -> FdwResult {
         let quals = ctx.get_quals();
-        let url = format!("{}/{}?_count={}", self.base_url, "Observation", 20);
+        let url = format!("{}/{}?_count={}", self.base_url, "Observation", 1000);
 
         // let url = if let Some(ref url) = self.url {
         //     url.clone()
