@@ -268,13 +268,13 @@ impl Guest for FhirFdw {
 
         let opts = ctx.get_options(OptionsType::Server);
         this.base_url = opts.require_or("fhir_url", "https://hapi.fhir.org/baseR4");
-        let api_key = match opts.get("api_key") {
-            Some(key) => key,
-            None => {
-                let key_id = opts.require("api_key_id")?;
-                utils::get_vault_secret(&key_id).unwrap_or_default()
-            }
-        };
+        // let api_key = match opts.get("api_key") {
+        //     Some(key) => key,
+        //     None => {
+        //         let key_id = opts.require("api_key_id")?;
+        //         utils::get_vault_secret(&key_id).unwrap_or_default()
+        //     }
+        // };
 
         this.headers
             .push(("Content-Type".to_owned(), "application/json".to_string()));
