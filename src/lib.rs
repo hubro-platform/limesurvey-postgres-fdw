@@ -605,7 +605,8 @@ impl Guest for FhirFdw {
     fn begin_scan(_ctx: &Context) -> FdwResult {
         let this = Self::this_mut();
 
-        // reset row counter
+        this.make_request(_ctx)?;
+
         this.row_cnt = 0;
 
         Ok(())
@@ -618,8 +619,6 @@ impl Guest for FhirFdw {
             // return 'None' to stop data scans
             return Ok(None);
         }
-
-        this.make_request(ctx)?;
 
         let src_row = &this.src_rows[this.row_cnt];
         for tgt_col in ctx.get_columns() {

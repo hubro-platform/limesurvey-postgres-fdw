@@ -1,4 +1,4 @@
-package hubroplatform:fhir-postgres-fdw@0.4.9;
+package hubroplatform:fhir-postgres-fdw@0.5.0;
 
 world example {
     import supabase:wrappers/http@0.1.0;
