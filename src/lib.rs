@@ -248,7 +248,7 @@ impl FhirFdw {
                 }
             })
         }) {
-            self.url = Some(next_link)
+            // self.url = Some(next_link)
         }
 
         Ok(())
