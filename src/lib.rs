@@ -58,7 +58,7 @@ impl FhirFdw {
         let mut src = &Default::default();
 
         match tgt_col_name.as_str() {
-            "effectiveStart" => {
+            "effectivestart" => {
                 src = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
@@ -68,7 +68,7 @@ impl FhirFdw {
                     })
                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
             }
-            "effectiveEnd" => {
+            "effectiveend" => {
                 src = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
@@ -84,7 +84,7 @@ impl FhirFdw {
                     .and_then(|v| v.get("reference"))
                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
             }
-            "loincCode" => {
+            "loinccode" => {
                 if let Some(coding_array) = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
