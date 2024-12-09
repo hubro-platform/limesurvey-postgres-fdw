@@ -372,7 +372,7 @@ struct FhirFdw {
     headers: Vec<(String, String)>,
     object: String,
     src_rows: Vec<JsonValue>,
-    row_cnt: usize
+    row_cnt: usize,
 }
 
 // #[derive(Debug, Default)]
@@ -417,7 +417,7 @@ impl FhirFdw {
                         v.get("effectiveDateTime")
                             .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
                     })
-                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+                    .unwrap_or(&JsonValue::Null);
             }
             "effectiveend" => {
                 src = src_row
@@ -425,7 +425,7 @@ impl FhirFdw {
                     .and_then(|v| v.get("resource"))
                     .and_then(|v| v.get("effectivePeriod"))
                     .and_then(|v| v.get("end"))
-                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+                    .unwrap_or(&JsonValue::Null);
             }
             "subject" => {
                 src = src_row
@@ -433,7 +433,7 @@ impl FhirFdw {
                     .and_then(|v| v.get("resource"))
                     .and_then(|v| v.get("subject"))
                     .and_then(|v| v.get("reference"))
-                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+                    .unwrap_or(&JsonValue::Null);
             }
             "loinccode" => {
                 if let Some(coding_array) = src_row
@@ -444,7 +444,8 @@ impl FhirFdw {
                     .and_then(|v| v.as_array())
                     .and_then(|array| {
                         array.iter().find(|coding| {
-                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                            coding.get("system")
+                                == Some(&JsonValue::String("http://loinc.org".to_string()))
                         })
                     })
                 {
@@ -467,7 +468,8 @@ impl FhirFdw {
                     .and_then(|v| v.as_array())
                     .and_then(|array| {
                         array.iter().find(|coding| {
-                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                            coding.get("system")
+                                == Some(&JsonValue::String("http://loinc.org".to_string()))
                         })
                     })
                     .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
@@ -492,7 +494,8 @@ impl FhirFdw {
                     .and_then(|v| v.as_array())
                     .and_then(|array| {
                         array.iter().find(|coding| {
-                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                            coding.get("system")
+                                == Some(&JsonValue::String("http://loinc.org".to_string()))
                         })
                     })
                     .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
@@ -510,6 +513,10 @@ impl FhirFdw {
                     .and_then(|v| v.get(&tgt_col_name))
                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
             }
+        }
+
+        if (src == &JsonValue::Null) {
+            return Ok(None);
         }
 
         let cell = match tgt_col.type_oid() {
@@ -639,7 +646,7 @@ impl Guest for FhirFdw {
     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
         let this = Self::this_mut();
 
-        if this.row_cnt >= this.src_rows.len()  {
+        if this.row_cnt >= this.src_rows.len() {
             // return 'None' to stop data scans
             return Ok(None);
         }
