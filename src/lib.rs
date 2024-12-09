@@ -372,7 +372,7 @@ struct FhirFdw {
     headers: Vec<(String, String)>,
     object: String,
     src_rows: Vec<JsonValue>,
-    row_cnt: usize,
+    row_cnt: usize
 }
 
 // #[derive(Debug, Default)]
@@ -614,7 +614,7 @@ impl Guest for FhirFdw {
     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
         let this = Self::this_mut();
 
-        if this.row_cnt >= 1 {
+        if this.row_cnt >= this.src_rows.len()  {
             // return 'None' to stop data scans
             return Ok(None);
         }
