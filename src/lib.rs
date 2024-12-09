@@ -233,24 +233,26 @@ impl FhirFdw {
                 }
             })
             .ok_or("cannot get query result data")?;
+
         self.src_idx = 0;
 
-        let pagination = resp_json.pointer("/link").and_then(|v| v.as_array());
+        // let pagination = resp_json.pointer("/link").and_then(|v| v.as_array());
+        //
+        // if let Some(next_link) = pagination.and_then(|array| {
+        //     array.iter().find_map(|item| {
+        //         if item.get("relation").and_then(|r| r.as_str()) == Some("next") {
+        //             item.get("url")
+        //                 .and_then(|href| href.as_str())
+        //                 .map(|href| href.to_owned())
+        //         } else {
+        //             None
+        //         }
+        //     })
+        // }) {
+        //     self.url = next_link
+        // }
 
-        if let Some(next_link) = pagination.and_then(|array| {
-            array.iter().find_map(|item| {
-                if item.get("relation").and_then(|r| r.as_str()) == Some("next") {
-                    item.get("url")
-                        .and_then(|href| href.as_str())
-                        .map(|href| href.to_owned())
-                } else {
-                    None
-                }
-            })
-        }) {
-            // self.url = Some(next_link)
-        }
-
+        self.url = None;
         Ok(())
     }
 }
@@ -298,18 +300,14 @@ impl Guest for FhirFdw {
     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
         let this = Self::this_mut();
 
-        // if all local rows are consumed
-        if this.src_idx >= this.src_rows.len() {
-            // if no more pages, stop the iter scan
-            if this.url.is_none() {
-                return Ok(None);
-            }
-
-            // otherwise, make another call to get next page data
-            this.make_request(ctx)?;
-        }
-
-        // convert FHIR row to Postgres row
+        // if this.src_idx >= this.src_rows.len() {
+        //     if this.url.is_none() {
+        //         return Ok(None);
+        //     }
+        //
+        //     this.make_request(ctx)?;
+        // }
+        //
         let src_row = &this.src_rows[this.src_idx];
         for tgt_col in ctx.get_columns() {
             let cell = this.src_to_cell(src_row, &tgt_col)?;
