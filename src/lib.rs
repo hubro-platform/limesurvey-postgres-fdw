@@ -442,24 +442,35 @@ impl FhirFdw {
                     .and_then(|v| v.get("code"))
                     .and_then(|v| v.get("coding"))
                     .and_then(|v| v.as_array())
+                    .and_then(|array| {
+                        array.iter().find(|coding| {
+                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                        })
+                    })
                 {
-                    for coding in coding_array {
-                        if let Some(system) = coding.get("system") {
-                            if system == "http://loinc.org" {
-                                src = coding.get("code").ok_or(format!(
-                                    "Cannot extract 'code' when 'system' is 'http://loinc.org'"
-                                ))?;
-                                break;
-                            }
-                        }
-                    }
+                    src = coding_array.get("code").ok_or(format!(
+                        "Cannot extract 'code' when 'system' is 'http://loinc.org'"
+                    ))?;
                 }
             }
             "value" => {
                 if let Some(quantity) = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("valueQuantity"))
+                    .and_then(|v| {
+                        if v.get("component").is_some() {
+                            return None; // Disregard cases with 'component'
+                        }
+                        v.get("code")
+                    })
+                    .and_then(|v| v.get("coding"))
+                    .and_then(|v| v.as_array())
+                    .and_then(|array| {
+                        array.iter().find(|coding| {
+                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                        })
+                    })
+                    .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
                 {
                     src = quantity.get("value").ok_or(format!(
                         "Cannot extract 'value' from 'valueQuantity' for column '{}'",
@@ -471,7 +482,20 @@ impl FhirFdw {
                 if let Some(quantity) = src_row
                     .as_object()
                     .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("valueQuantity"))
+                    .and_then(|v| {
+                        if v.get("component").is_some() {
+                            return None; // Disregard cases with 'component'
+                        }
+                        v.get("code")
+                    })
+                    .and_then(|v| v.get("coding"))
+                    .and_then(|v| v.as_array())
+                    .and_then(|array| {
+                        array.iter().find(|coding| {
+                            coding.get("system") == Some(&JsonValue::String("http://loinc.org".to_string()))
+                        })
+                    })
+                    .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
                 {
                     src = quantity.get("unit").ok_or(format!(
                         "Cannot extract 'unit' from 'valueQuantity' for column '{}'",
