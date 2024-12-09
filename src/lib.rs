@@ -355,17 +355,35 @@
 // bindings::export!(FhirFdw with_types_in bindings);
 #[allow(warnings)]
 mod bindings;
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
 use bindings::{
     exports::supabase::wrappers::routines::Guest,
-    supabase::wrappers::types::{Cell, Context, FdwError, FdwResult, Row},
+    supabase::wrappers::{
+        http, time,
+        types::{Cell, Column, Context, FdwError, FdwResult, OptionsType, Row, TypeOid, Value},
+        utils,
+    },
 };
-
 #[derive(Debug, Default)]
 struct FhirFdw {
-    // row counter
-    row_cnt: i32,
+    base_url: String,
+    url: Option<String>,
+    headers: Vec<(String, String)>,
+    object: String,
+    src_rows: Vec<JsonValue>,
+    row_cnt: usize,
 }
+
+// #[derive(Debug, Default)]
+// struct FhirFdw {
+//     base_url: String,
+//     url: Option<String>,
+//     headers: Vec<(String, String)>,
+//     object: String,
+
+//     src_idx: usize,
+// }
 
 static mut INSTANCE: *mut FhirFdw = std::ptr::null_mut::<FhirFdw>();
 
@@ -379,6 +397,184 @@ impl FhirFdw {
 
     fn this_mut() -> &'static mut Self {
         unsafe { &mut (*INSTANCE) }
+    }
+
+    fn src_to_cell(&self, src_row: &JsonValue, tgt_col: &Column) -> Result<Option<Cell>, FdwError> {
+        let tgt_col_name = tgt_col.name();
+
+        if &tgt_col_name == "attrs" {
+            return Ok(Some(Cell::Json(src_row.to_string())));
+        }
+
+        let mut src = &Default::default();
+
+        match tgt_col_name.as_str() {
+            "effectivestart" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| {
+                        v.get("effectiveDateTime")
+                            .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
+                    })
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "effectiveend" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("effectivePeriod"))
+                    .and_then(|v| v.get("end"))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "subject" => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("subject"))
+                    .and_then(|v| v.get("reference"))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+            "loinccode" => {
+                if let Some(coding_array) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("code"))
+                    .and_then(|v| v.get("coding"))
+                    .and_then(|v| v.as_array())
+                {
+                    for coding in coding_array {
+                        if let Some(system) = coding.get("system") {
+                            if system == "http://loinc.org" {
+                                src = coding.get("code").ok_or(format!(
+                                    "Cannot extract 'code' when 'system' is 'http://loinc.org'"
+                                ))?;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            "value" => {
+                if let Some(quantity) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("valueQuantity"))
+                {
+                    src = quantity.get("value").ok_or(format!(
+                        "Cannot extract 'value' from 'valueQuantity' for column '{}'",
+                        tgt_col_name
+                    ))?;
+                }
+            }
+            "unit" => {
+                if let Some(quantity) = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get("valueQuantity"))
+                {
+                    src = quantity.get("unit").ok_or(format!(
+                        "Cannot extract 'unit' from 'valueQuantity' for column '{}'",
+                        tgt_col_name
+                    ))?;
+                }
+            }
+            _ => {
+                src = src_row
+                    .as_object()
+                    .and_then(|v| v.get("resource"))
+                    .and_then(|v| v.get(&tgt_col_name))
+                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
+            }
+        }
+
+        let cell = match tgt_col.type_oid() {
+            TypeOid::Bool => src.as_bool().map(Cell::Bool),
+            TypeOid::I8 => src.as_i64().map(|v| Cell::I8(v as i8)),
+            TypeOid::I16 => src.as_i64().map(|v| Cell::I16(v as i16)),
+            TypeOid::F32 => src.as_f64().map(|v| Cell::F32(v as f32)),
+            TypeOid::I32 => src.as_i64().map(|v| Cell::I32(v as i32)),
+            TypeOid::F64 => src.as_f64().map(Cell::F64),
+            TypeOid::I64 => src.as_i64().map(Cell::I64),
+            TypeOid::Numeric => src.as_f64().map(Cell::Numeric),
+            TypeOid::String => src.as_str().map(|v| Cell::String(v.to_owned())),
+            TypeOid::Date => {
+                if let Some(s) = src.as_str() {
+                    let ts = time::parse_from_rfc3339(s)?;
+                    Some(Cell::Date(ts / 1_000_000))
+                } else {
+                    None
+                }
+            }
+            TypeOid::Timestamp => {
+                if let Some(s) = src.as_str() {
+                    let ts = time::parse_from_rfc3339(s)?;
+                    Some(Cell::Timestamp(ts))
+                } else {
+                    None
+                }
+            }
+            TypeOid::Timestamptz => {
+                if let Some(s) = src.as_str() {
+                    let ts = time::parse_from_rfc3339(s)?;
+                    Some(Cell::Timestamptz(ts))
+                } else {
+                    None
+                }
+            }
+            TypeOid::Json => src.as_object().map(|_| Cell::Json(src.to_string())),
+        };
+
+        Ok(cell)
+    }
+
+    fn make_request(&mut self, ctx: &Context) -> FdwResult {
+        let quals = ctx.get_quals();
+        let url = format!("{}/{}?_count={}", self.base_url, "Observation", 20);
+
+        // let url = if let Some(ref url) = self.url {
+        //     url.clone()
+        // } else {
+        //     let object = quals
+        //         .iter()
+        //         .find(|q| q.field() == "id")
+        //         .and_then(|id| {
+        //             if !self.can_pushdown_id() {
+        //                 return None;
+        //             }
+        //
+        //             // push down id filter
+        //             match id.value() {
+        //                 Value::Cell(Cell::String(s)) => Some(format!("{}/{}", self.object, s)),
+        //                 _ => None,
+        //             }
+        //         })
+        //         .unwrap_or_else(|| self.object.clone());
+        //     format!("{}/{}?_count={}", self.base_url, object, 20)
+        // };
+        let req = http::Request {
+            method: http::Method::Get,
+            url,
+            headers: self.headers.clone(),
+            body: String::default(),
+        };
+        let resp = http::get(&req)?;
+        let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
+
+        // save source rows
+        self.src_rows = resp_json
+            .as_object()
+            .and_then(|v| v.get("entry"))
+            .and_then(|v| {
+                if v.is_object() {
+                    Some(vec![v.to_owned()])
+                } else {
+                    v.as_array().cloned()
+                }
+            })
+            .ok_or("cannot get query result data")?;
+
+        Ok(())
     }
 }
 
@@ -406,21 +602,29 @@ impl Guest for FhirFdw {
         let this = Self::this_mut();
 
         if this.row_cnt >= 1 {
-            // return 'None' to stop data scan
+            // return 'None' to stop data scans
             return Ok(None);
         }
 
-        for tgt_col in &ctx.get_columns() {
-            match tgt_col.name().as_str() {
-                "id" => {
-                    row.push(Some(&Cell::I64(42)));
-                }
-                "col" => {
-                    row.push(Some(&Cell::String("Hello world".to_string())));
-                }
-                _ => unreachable!(),
-            }
+        this.make_request(ctx)?;
+
+        let src_row = &this.src_rows[this.row_cnt];
+        for tgt_col in ctx.get_columns() {
+            let cell = this.src_to_cell(src_row, &tgt_col)?;
+            row.push(cell.as_ref());
         }
+
+        // for tgt_col in &ctx.get_columns() {
+        //     match tgt_col.name().as_str() {
+        //         "id" => {
+        //             row.push(Some(&Cell::I64(42)));
+        //         }
+        //         "col" => {
+        //             row.push(Some(&Cell::String("Hello world".to_string())));
+        //         }
+        //         _ => unreachable!(),
+        //     }
+        // }
 
         this.row_cnt += 1;
 
