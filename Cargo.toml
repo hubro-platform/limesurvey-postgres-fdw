@@ -1,6 +1,6 @@
 [package]
 name = "limesurvey_postgres_fdw"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 
 [lib]
