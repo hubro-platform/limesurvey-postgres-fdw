@@ -1,8 +1,7 @@
-# FHIR Postgres Wrapper
+# LimeSurvey Postgres Wrapper
 
-This project implements Wasm Foreign Data Wrapper (FDW) for a FHIR (Fast Healthcare
-Interoperability Resources) data source. This allows for seamless
-integration, querying, and manipulation of healthcare data stored in FHIR format from within a Postgres database.
+This project implements Wasm Foreign Data Wrapper (FDW) for a LimeSurvey data source. This allows for seamless
+integration, querying, and manipulation of survey data stored in LimeSurvey format from within a Postgres database.
 
 ## Project Structure
 
@@ -22,7 +21,9 @@ integration, querying, and manipulation of healthcare data stored in FHIR format
     └── world.wit
 ```
 
-A [Wasm Interface Type](https://github.com/bytecodealliance/wit-bindgen) (WIT) defines the interfaces between the Wasm FDW (guest) and the Wasm runtime (host). For example, the `http.wit` defines the HTTP related types and functions can be used in the guest, and the `routines.wit` defines the functions the guest needs to implement.
+A [Wasm Interface Type](https://github.com/bytecodealliance/wit-bindgen) (WIT) defines the interfaces between the Wasm
+FDW (guest) and the Wasm runtime (host). For example, the `http.wit` defines the HTTP related types and functions can be
+used in the guest, and the `routines.wit` defines the functions the guest needs to implement.
 
 ## Installation
 
@@ -36,34 +37,34 @@ create foreign data wrapper wasm_wrapper
   validator wasm_fdw_validator;
 ```
 
-Install FHIR wrapper from Github
+Install LimeSurvey wrapper from Github
 
 ```postgresql
-create server fhir
+create server limesurvey
     foreign data wrapper wasm_wrapper
     options (
-        fdw_package_url 'https://github.com/hubro-platform/fhir-postgres-fdw/releases/download/v0.2.0/fhir_postgres_fdw.wasm',
-        fdw_package_name 'hubroplatform:fhir-postgres-fdw',
-        fdw_package_version '0.2.0',
-        fdw_package_checksum '338674c4c983aa6dbc2b6e63659076fe86d847ca0da6d57a61372b44e0fe4ac9',
-        fhir_url 'https://hapi.fhir.org/baseR4'
+        fdw_package_url 'https://github.com/hubro-platform/limesurvey-fdw/releases/download/v0.1.0/limesurvey_fdw.wasm',
+        fdw_package_name 'hubroplatform:limesurvey-fdw',
+        fdw_package_version '0.1.0',
+        fdw_package_checksum 'abc1234567abcdef1234567abc1234567abcdef1234567abcdef1234567abcdef',
+        api_url 'https://example.com/admin/remotecontrol',
+        api_key 'your_limesurvey_api_key'
         );
 
-create schema fhir;
+create schema limesurvey;
 
-create foreign table fhir.observations (
+create foreign table limesurvey.surveys (
     id text,
-    effectiveStart timestamptz,
-    effectiveEnd timestamptz,
-    loincCode text,
-    subject text,
-    value double precision,
-    unit text,
+    title text,
+    start_date timestamptz,
+    end_date timestamptz,
+    owner text,
+    responses jsonb,
     attrs jsonb
     )
-    server fhir
+    server limesurvey
     options (
-        object 'Observation',
+        object 'Survey',
         rowid_column 'id'
         );
 ```

@@ -1,4 +1,4 @@
-package hubroplatform:fhir-postgres-fdw@0.5.5;
+package hubroplatform:limesurvey-postgres-fdw@0.5.5;
 
 world example {
     import supabase:wrappers/http@0.1.0;

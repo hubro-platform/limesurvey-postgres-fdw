@@ -1,360 +1,6 @@
-// #[allow(warnings)]
-// mod bindings;
-// use serde_json::{json, Map as JsonMap, Value as JsonValue};
-//
-// use bindings::{
-//     exports::supabase::wrappers::routines::Guest,
-//     supabase::wrappers::{
-//         http, time,
-//         types::{Cell, Column, Context, FdwError, FdwResult, OptionsType, Row, TypeOid, Value},
-//         utils,
-//     },
-// };
-//
-// #[derive(Debug, Default)]
-// struct FhirFdw {
-//     base_url: String,
-//     url: Option<String>,
-//     headers: Vec<(String, String)>,
-//     object: String,
-//     src_rows: Vec<JsonValue>,
-//     src_idx: usize,
-// }
-//
-// // pointer for the static FDW instance
-// static mut INSTANCE: *mut FhirFdw = std::ptr::null_mut::<FhirFdw>();
-//
-// impl FhirFdw {
-//     // initialise FDW instance
-//     fn init_instance() {
-//         let instance = Self::default();
-//         unsafe {
-//             INSTANCE = Box::leak(Box::new(instance));
-//         }
-//     }
-//
-//     fn this_mut() -> &'static mut Self {
-//         unsafe { &mut (*INSTANCE) }
-//     }
-//
-//     fn can_pushdown_id(&self) -> bool {
-//         self.object.starts_with("Observation")
-//     }
-//
-//     fn page_size(&self) -> usize {
-//         match self.object.as_str() {
-//             "Observation" => 20,
-//             _ => 200,
-//         }
-//     }
-//
-//     fn src_to_cell(&self, src_row: &JsonValue, tgt_col: &Column) -> Result<Option<Cell>, FdwError> {
-//         let tgt_col_name = tgt_col.name();
-//
-//         if &tgt_col_name == "attrs" {
-//             return Ok(Some(Cell::Json(src_row.to_string())));
-//         }
-//
-//         let mut src = &Default::default();
-//
-//         match tgt_col_name.as_str() {
-//             "effectivestart" => {
-//                 src = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| {
-//                         v.get("effectiveDateTime")
-//                             .or_else(|| v.get("effectivePeriod").and_then(|ep| ep.get("start")))
-//                     })
-//                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
-//             }
-//             "effectiveend" => {
-//                 src = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get("effectivePeriod"))
-//                     .and_then(|v| v.get("end"))
-//                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
-//             }
-//             "subject" => {
-//                 src = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get("subject"))
-//                     .and_then(|v| v.get("reference"))
-//                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
-//             }
-//             "loinccode" => {
-//                 if let Some(coding_array) = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get("code"))
-//                     .and_then(|v| v.get("coding"))
-//                     .and_then(|v| v.as_array())
-//                 {
-//                     for coding in coding_array {
-//                         if let Some(system) = coding.get("system") {
-//                             if system == "http://loinc.org" {
-//                                 src = coding.get("code").ok_or(format!(
-//                                     "Cannot extract 'code' when 'system' is 'http://loinc.org'"
-//                                 ))?;
-//                                 break;
-//                             }
-//                         }
-//                     }
-//                 }
-//             }
-//             "value" => {
-//                 if let Some(quantity) = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get("valueQuantity"))
-//                 {
-//                     src = quantity.get("value").ok_or(format!(
-//                         "Cannot extract 'value' from 'valueQuantity' for column '{}'",
-//                         tgt_col_name
-//                     ))?;
-//                 }
-//             }
-//             "unit" => {
-//                 if let Some(quantity) = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get("valueQuantity"))
-//                 {
-//                     src = quantity.get("unit").ok_or(format!(
-//                         "Cannot extract 'unit' from 'valueQuantity' for column '{}'",
-//                         tgt_col_name
-//                     ))?;
-//                 }
-//             }
-//             _ => {
-//                 src = src_row
-//                     .as_object()
-//                     .and_then(|v| v.get("resource"))
-//                     .and_then(|v| v.get(&tgt_col_name))
-//                     .ok_or(format!("source column '{}' not found", tgt_col_name))?;
-//             }
-//         }
-//
-//         let cell = match tgt_col.type_oid() {
-//             TypeOid::Bool => src.as_bool().map(Cell::Bool),
-//             TypeOid::I8 => src.as_i64().map(|v| Cell::I8(v as i8)),
-//             TypeOid::I16 => src.as_i64().map(|v| Cell::I16(v as i16)),
-//             TypeOid::F32 => src.as_f64().map(|v| Cell::F32(v as f32)),
-//             TypeOid::I32 => src.as_i64().map(|v| Cell::I32(v as i32)),
-//             TypeOid::F64 => src.as_f64().map(Cell::F64),
-//             TypeOid::I64 => src.as_i64().map(Cell::I64),
-//             TypeOid::Numeric => src.as_f64().map(Cell::Numeric),
-//             TypeOid::String => src.as_str().map(|v| Cell::String(v.to_owned())),
-//             TypeOid::Date => {
-//                 if let Some(s) = src.as_str() {
-//                     let ts = time::parse_from_rfc3339(s)?;
-//                     Some(Cell::Date(ts / 1_000_000))
-//                 } else {
-//                     None
-//                 }
-//             }
-//             TypeOid::Timestamp => {
-//                 if let Some(s) = src.as_str() {
-//                     let ts = time::parse_from_rfc3339(s)?;
-//                     Some(Cell::Timestamp(ts))
-//                 } else {
-//                     None
-//                 }
-//             }
-//             TypeOid::Timestamptz => {
-//                 if let Some(s) = src.as_str() {
-//                     let ts = time::parse_from_rfc3339(s)?;
-//                     Some(Cell::Timestamptz(ts))
-//                 } else {
-//                     None
-//                 }
-//             }
-//             TypeOid::Json => src.as_object().map(|_| Cell::Json(src.to_string())),
-//         };
-//
-//         Ok(cell)
-//     }
-//
-//     fn make_request(&mut self, ctx: &Context) -> FdwResult {
-//         let quals = ctx.get_quals();
-//
-//         let url = if let Some(ref url) = self.url {
-//             url.clone()
-//         } else {
-//             let object = quals
-//                 .iter()
-//                 .find(|q| q.field() == "id")
-//                 .and_then(|id| {
-//                     if !self.can_pushdown_id() {
-//                         return None;
-//                     }
-//
-//                     // push down id filter
-//                     match id.value() {
-//                         Value::Cell(Cell::String(s)) => Some(format!("{}/{}", self.object, s)),
-//                         _ => None,
-//                     }
-//                 })
-//                 .unwrap_or_else(|| self.object.clone());
-//             format!("{}/{}?_count={}", self.base_url, object, self.page_size())
-//         };
-//         let req = http::Request {
-//             method: http::Method::Get,
-//             url,
-//             headers: self.headers.clone(),
-//             body: String::default(),
-//         };
-//         let resp = http::get(&req)?;
-//         let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
-//
-//         // if the 404 is caused by no object found, we shouldn't take it as an error
-//         // if resp.status_code == 404 && resp_json.pointer("/error/code") == Some(&json!("not_found"))
-//         // {
-//         //     self.src_rows = Vec::default();
-//         //     self.src_idx = 0;
-//         //     self.url = None;
-//         //     return Ok(());
-//         // }
-//
-//         http::error_for_status(&resp).map_err(|err| format!("{}: {}", err, resp.body))?;
-//
-//         // save source rows
-//         self.src_rows = resp_json
-//             .as_object()
-//             .and_then(|v| v.get("entry"))
-//             .and_then(|v| {
-//                 // convert a single object response to an array
-//                 if v.is_object() {
-//                     Some(vec![v.to_owned()])
-//                 } else {
-//                     v.as_array().cloned()
-//                 }
-//             })
-//             .ok_or("cannot get query result data")?;
-//
-//         self.src_idx = 0;
-//
-//         // let pagination = resp_json.pointer("/link").and_then(|v| v.as_array());
-//         //
-//         // if let Some(next_link) = pagination.and_then(|array| {
-//         //     array.iter().find_map(|item| {
-//         //         if item.get("relation").and_then(|r| r.as_str()) == Some("next") {
-//         //             item.get("url")
-//         //                 .and_then(|href| href.as_str())
-//         //                 .map(|href| href.to_owned())
-//         //         } else {
-//         //             None
-//         //         }
-//         //     })
-//         // }) {
-//         //     self.url = next_link
-//         // }
-//
-//         self.url = None;
-//         Ok(())
-//     }
-// }
-//
-// impl Guest for FhirFdw {
-//     fn host_version_requirement() -> String {
-//         // semver expression for Wasm FDW host version requirement
-//         // ref: https://docs.rs/semver/latest/semver/enum.Op.html
-//         "^0.1.0".to_string()
-//     }
-//
-//     fn init(ctx: &Context) -> FdwResult {
-//         Self::init_instance();
-//         let this = Self::this_mut();
-//
-//         let opts = ctx.get_options(OptionsType::Server);
-//         this.base_url = opts.require_or("fhir_url", "https://hapi.fhir.org/baseR4");
-//         // let api_key = match opts.get("api_key") {
-//         //     Some(key) => key,
-//         //     None => {
-//         //         let key_id = opts.require("api_key_id")?;
-//         //         utils::get_vault_secret(&key_id).unwrap_or_default()
-//         //     }
-//         // };
-//
-//         this.headers
-//             .push(("content-type".to_owned(), "application/json".to_string()));
-//         // this.headers
-//         //     .push(("authorization".to_owned(), format!("Bearer {}", api_key)));
-//
-//         Ok(())
-//     }
-//
-//     fn begin_scan(ctx: &Context) -> FdwResult {
-//         let this = Self::this_mut();
-//         let opts = ctx.get_options(OptionsType::Table);
-//         this.object = opts.require("object")?;
-//
-//         this.url = None;
-//         this.make_request(ctx)?;
-//
-//         Ok(())
-//     }
-//
-//     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
-//         let this = Self::this_mut();
-//
-//         // if this.src_idx >= this.src_rows.len() {
-//         //     if this.url.is_none() {
-//         //         return Ok(None);
-//         //     }
-//         //
-//         //     this.make_request(ctx)?;
-//         // }
-//         //
-//         let src_row = &this.src_rows[this.src_idx];
-//         for tgt_col in ctx.get_columns() {
-//             let cell = this.src_to_cell(src_row, &tgt_col)?;
-//             row.push(cell.as_ref());
-//         }
-//
-//         this.src_idx += 1;
-//
-//         Ok(Some(0))
-//     }
-//
-//     fn re_scan(ctx: &Context) -> FdwResult {
-//         let this = Self::this_mut();
-//         this.url = None;
-//         this.make_request(ctx)
-//     }
-//
-//     fn end_scan(_ctx: &Context) -> FdwResult {
-//         let this = Self::this_mut();
-//         this.src_rows.clear();
-//         Ok(())
-//     }
-//
-//     fn begin_modify(_ctx: &Context) -> FdwResult {
-//         Err("modify on foreign table is not supported".to_owned())
-//     }
-//
-//     fn insert(_ctx: &Context, _row: &Row) -> FdwResult {
-//         Ok(())
-//     }
-//
-//     fn update(_ctx: &Context, _rowid: Cell, _row: &Row) -> FdwResult {
-//         Ok(())
-//     }
-//
-//     fn delete(_ctx: &Context, _rowid: Cell) -> FdwResult {
-//         Ok(())
-//     }
-//
-//     fn end_modify(_ctx: &Context) -> FdwResult {
-//         Ok(())
-//     }
-// }
-//
-// bindings::export!(FhirFdw with_types_in bindings);
 #[allow(warnings)]
 mod bindings;
+use base64;
 use serde_json::{json, Map as JsonMap, Value as JsonValue};
 
 use bindings::{
@@ -366,28 +12,42 @@ use bindings::{
     },
 };
 #[derive(Debug, Default)]
-struct FhirFdw {
+struct LimeFdw {
     base_url: String,
+    username: String,
+    password: String,
     url: Option<String>,
     headers: Vec<(String, String)>,
     object: String,
     src_rows: Vec<JsonValue>,
     row_cnt: usize,
+    session_key: String,
+    survey_ids: Vec<u32>,
+    responses: Vec<Response>,
+    total_answers_count: usize,
 }
 
-// #[derive(Debug, Default)]
-// struct FhirFdw {
-//     base_url: String,
-//     url: Option<String>,
-//     headers: Vec<(String, String)>,
-//     object: String,
+#[derive(Debug, Default)]
+struct Question {
+    question: String,
+    code: String,
+    sid: u32,
+}
 
-//     src_idx: usize,
-// }
+#[derive(Debug, Default)]
+struct Answer {
+    question: Question,
+    answer: String,
+}
 
-static mut INSTANCE: *mut FhirFdw = std::ptr::null_mut::<FhirFdw>();
+#[derive(Debug, Default)]
+struct Response {
+    answers: Vec<Answer>,
+}
 
-impl FhirFdw {
+static mut INSTANCE: *mut LimeFdw = std::ptr::null_mut::<LimeFdw>();
+
+impl LimeFdw {
     fn init() {
         let instance = Self::default();
         unsafe {
@@ -399,209 +59,239 @@ impl FhirFdw {
         unsafe { &mut (*INSTANCE) }
     }
 
-    fn src_to_cell(&self, src_row: &JsonValue, tgt_col: &Column) -> Result<Option<Cell>, FdwError> {
+    fn answer_to_cell(&self, answer: &Answer, tgt_col: &Column) -> Result<Option<Cell>, FdwError> {
         let tgt_col_name = tgt_col.name();
 
-        if &tgt_col_name == "attrs" {
-            return Ok(Some(Cell::Json(src_row.to_string())));
+        // if &tgt_col_name == "attrs" {
+        //     return Ok(Some(Cell::Json(src_row.to_string())));
+        // }
+
+        if &tgt_col_name == "question" {
+            return Ok(Some(Cell::String(answer.question.question.clone())));
         }
 
-        let mut src = &Default::default();
-
-        match tgt_col_name.as_str() {
-            "effectivestart" => {
-                src = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("effectiveDateTime"))
-                    .ok_or_else(|| "")?;
-            }
-            "effectiveend" => {
-                src = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("effectiveDateTime"))
-                    .ok_or_else(|| "")?;
-            }
-            "subject" => {
-                src = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("subject"))
-                    .and_then(|v| v.get("reference"))
-                    .unwrap_or(&JsonValue::Null);
-            }
-            "loinccode" => {
-                if let Some(coding_array) = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get("code"))
-                    .and_then(|v| v.get("coding"))
-                    .and_then(|v| v.as_array())
-                    .and_then(|array| {
-                        array.iter().find(|coding| {
-                            coding.get("system")
-                                == Some(&JsonValue::String("http://loinc.org".to_string()))
-                        })
-                    })
-                {
-                    src = coding_array.get("code").ok_or(format!(
-                        "Cannot extract 'code' when 'system' is 'http://loinc.org'"
-                    ))?;
-                }
-            }
-            "value" => {
-                if let Some(quantity) = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| {
-                        if v.get("component").is_some() {
-                            return None; // Disregard cases with 'component'
-                        }
-                        v.get("code")
-                    })
-                    .and_then(|v| v.get("coding"))
-                    .and_then(|v| v.as_array())
-                    .and_then(|array| {
-                        array.iter().find(|coding| {
-                            coding.get("system")
-                                == Some(&JsonValue::String("http://loinc.org".to_string()))
-                        })
-                    })
-                    .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
-                {
-                    src = quantity.get("value").ok_or(format!(
-                        "Cannot extract 'value' from 'valueQuantity' for column '{}'",
-                        tgt_col_name
-                    ))?;
-                }
-            }
-            "unit" => {
-                if let Some(quantity) = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| {
-                        if v.get("component").is_some() {
-                            return None; // Disregard cases with 'component'
-                        }
-                        v.get("code")
-                    })
-                    .and_then(|v| v.get("coding"))
-                    .and_then(|v| v.as_array())
-                    .and_then(|array| {
-                        array.iter().find(|coding| {
-                            coding.get("system")
-                                == Some(&JsonValue::String("http://loinc.org".to_string()))
-                        })
-                    })
-                    .and_then(|_| src_row.get("resource").and_then(|v| v.get("valueQuantity")))
-                {
-                    src = quantity.get("unit").ok_or(format!(
-                        "Cannot extract 'unit' from 'valueQuantity' for column '{}'",
-                        tgt_col_name
-                    ))?;
-                }
-            }
-            _ => {
-                src = src_row
-                    .as_object()
-                    .and_then(|v| v.get("resource"))
-                    .and_then(|v| v.get(&tgt_col_name))
-                    .ok_or(format!("source column '{}' not found", tgt_col_name))?;
-            }
+        if &tgt_col_name == "questioncode" {
+            return Ok(Some(Cell::String(answer.question.code.clone())));
         }
 
-        let cell = match tgt_col.type_oid() {
-            TypeOid::Bool => src.as_bool().map(Cell::Bool),
-            TypeOid::I8 => src.as_i64().map(|v| Cell::I8(v as i8)),
-            TypeOid::I16 => src.as_i64().map(|v| Cell::I16(v as i16)),
-            TypeOid::F32 => src.as_f64().map(|v| Cell::F32(v as f32)),
-            TypeOid::I32 => src.as_i64().map(|v| Cell::I32(v as i32)),
-            TypeOid::F64 => src.as_f64().map(Cell::F64),
-            TypeOid::I64 => src.as_i64().map(Cell::I64),
-            TypeOid::Numeric => src.as_f64().map(Cell::Numeric),
-            TypeOid::String => src.as_str().map(|v| Cell::String(v.to_owned())),
-            TypeOid::Date => {
-                if let Some(s) = src.as_str() {
-                    let ts = time::parse_from_rfc3339(s)?;
-                    Some(Cell::Date(ts / 1_000_000))
-                } else {
-                    None
-                }
-            }
-            TypeOid::Timestamp => {
-                if let Some(s) = src.as_str() {
-                    let ts = time::parse_from_rfc3339(s)?;
-                    Some(Cell::Timestamp(ts))
-                } else {
-                    None
-                }
-            }
-            TypeOid::Timestamptz => {
-                if let Some(s) = src.as_str() {
-                    let ts = time::parse_from_rfc3339(s)?;
-                    Some(Cell::Timestamptz(ts))
-                } else {
-                    None
-                }
-            }
-            TypeOid::Json => src.as_object().map(|_| Cell::Json(src.to_string())),
-        };
+        if &tgt_col_name == "answer" {
+            return Ok(Some(Cell::String(answer.answer.clone())));
+        }
 
-        Ok(cell)
+        if &tgt_col_name == "surveyid" {
+            return Ok(Some(Cell::String(answer.question.sid.to_string())));
+        }
+
+        Ok(None)
     }
 
-    fn make_request(&mut self, ctx: &Context) -> FdwResult {
+    fn get_session_key(&mut self, ctx: &Context) -> Result<String, FdwError> {
         let quals = ctx.get_quals();
-        let url = format!("{}/{}?_count={}", self.base_url, "Observation", 1000);
+        let url = format!("{}", self.base_url);
 
-        // let url = if let Some(ref url) = self.url {
-        //     url.clone()
-        // } else {
-        //     let object = quals
-        //         .iter()
-        //         .find(|q| q.field() == "id")
-        //         .and_then(|id| {
-        //             if !self.can_pushdown_id() {
-        //                 return None;
-        //             }
-        //
-        //             // push down id filter
-        //             match id.value() {
-        //                 Value::Cell(Cell::String(s)) => Some(format!("{}/{}", self.object, s)),
-        //                 _ => None,
-        //             }
-        //         })
-        //         .unwrap_or_else(|| self.object.clone());
-        //     format!("{}/{}?_count={}", self.base_url, object, 20)
-        // };
+        let body = serde_json::json!({
+            "method": "get_session_key",
+            "params": ["mmuzny", "sytjix-xubFug-9hidva","Authdb"],
+            "id": 1
+        });
+
         let req = http::Request {
-            method: http::Method::Get,
+            method: http::Method::Post,
             url,
             headers: self.headers.clone(),
-            body: String::default(),
+            body: body.to_string(),
         };
         let resp = http::get(&req)?;
         let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
 
-        // save source rows
-        self.src_rows = resp_json
+        let result = resp_json
             .as_object()
-            .and_then(|v| v.get("entry"))
-            .and_then(|v| {
-                if v.is_object() {
-                    Some(vec![v.to_owned()])
-                } else {
-                    v.as_array().cloned()
-                }
-            })
-            .ok_or("cannot get query result data")?;
+            .and_then(|v| v.get("result"))
+            .ok_or("cannot find result in response")?;
 
-        Ok(())
+        Ok(result.to_string())
+    }
+
+    fn get_surveys(&mut self, ctx: &Context) -> Result<Vec<u32>, FdwError> {
+        let quals = ctx.get_quals();
+        let url = format!("{}", self.base_url);
+        let body_list_surveys = serde_json::json!({
+            "method": "list_surveys",
+            "params": [
+                self.session_key.clone(),
+            ],
+            "id": 2
+        });
+
+        let url = format!("{}", self.base_url);
+        let req = http::Request {
+            method: http::Method::Post,
+            url,
+            headers: self.headers.clone(),
+            body: body_list_surveys.to_string(),
+        };
+        let resp = http::get(&req)?;
+        let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
+        let mut sids: Vec<u32> = vec![];
+        if let Some(results) = resp_json
+            .as_object()
+            .and_then(|v| v.get("result"))
+            .and_then(|v| v.as_array())
+        {
+            sids = results
+                .iter()
+                .filter_map(|item| {
+                    item.as_object()
+                        .and_then(|obj| obj.get("sid"))
+                        .and_then(|sid| sid.as_u64().map(|v| v as u32))
+                })
+                .collect();
+        }
+        Ok(sids)
+    }
+
+    fn get_questions(&mut self, ctx: &Context, sid: u32) -> Result<Vec<Question>, FdwError> {
+        let quals = ctx.get_quals();
+        let url = format!("{}", self.base_url);
+        let body_list_surveys = serde_json::json!({
+            "method": "list_questions",
+            "params": [
+                self.session_key.clone(),
+                sid
+            ],
+            "id": 2
+        });
+
+        let url = format!("{}", self.base_url);
+        let req = http::Request {
+            method: http::Method::Post,
+            url,
+            headers: self.headers.clone(),
+            body: body_list_surveys.to_string(),
+        };
+        let resp = http::get(&req)?;
+        let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
+        let mut questions: Vec<Question> = vec![];
+        if let Some(results) = resp_json
+            .as_object()
+            .and_then(|v| v.get("result"))
+            .and_then(|v| v.as_array())
+        {
+            questions = results
+                .iter()
+                .filter_map(|item| {
+                    let question = item.as_object()?;
+                    let sid = question
+                        .get("sid")
+                        .and_then(|qid| qid.as_u64())
+                        .map(|v| v as u32)?;
+
+                    let code = question
+                        .get("title")
+                        .and_then(|title| title.as_str())
+                        .map(String::from)?;
+
+                    let question = question
+                        .get("question")
+                        .and_then(|qtext| qtext.as_str())
+                        .map(String::from)?;
+
+                    Some(Question {
+                        code,
+                        sid,
+                        question,
+                    })
+                })
+                .collect();
+        }
+        Ok(questions)
+    }
+
+    fn get_results(&mut self, ctx: &Context, sid: u32) -> Result<Vec<Response>, FdwError> {
+        let questions = self.get_questions(ctx, sid)?;
+
+        let body_export_responses = serde_json::json!({
+            "method": "export_responses",
+            "params": [
+                self.session_key.clone(),
+                sid,
+                "json",
+                "en",
+                "all",
+                "code"
+            ],
+            "id": 2
+        });
+
+        let url = format!("{}", self.base_url);
+        let req = http::Request {
+            method: http::Method::Post,
+            url,
+            headers: self.headers.clone(),
+            body: body_export_responses.to_string(),
+        };
+        let resp = http::get(&req)?;
+        let resp_json: JsonValue = serde_json::from_str(&resp.body).map_err(|e| e.to_string())?;
+
+        let result = resp_json
+            .as_object()
+            .and_then(|v| v.get("result"))
+            .ok_or("cannot find result in response")?;
+
+        let result_decoded = if let Some(result_base64) = result.as_str() {
+            let decoded_bytes = base64::decode(result_base64).map_err(|e| e.to_string())?;
+            String::from_utf8(decoded_bytes).map_err(|e| e.to_string())?
+        } else {
+            return Err("result is not a string".to_string());
+        };
+
+        let result_json: JsonValue =
+            serde_json::from_str(&result_decoded).map_err(|e| e.to_string())?;
+
+        let answers: Vec<Response> = result_json
+            .as_array()
+            .ok_or("result_json is not an array")?
+            .iter()
+            .filter_map(|item| {
+                let answer_object = item.as_object()?;
+
+                let mut response: Response = Response { answers: vec![] };
+
+                for (key, value) in answer_object.iter() {
+                    // Skip specified keys
+                    if ["id", "submitdate", "lastpage", "startlanguage", "seed"]
+                        .contains(&key.as_str())
+                    {
+                        continue;
+                    }
+
+                    let answer_text = answer_object
+                        .get(key)
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("");
+
+                    let matching_question = questions.iter().find(|q| q.code == *key);
+
+                    if let Some(question) = matching_question {
+                        response.answers.push(Answer {
+                            question: Question {
+                                code: question.code.clone(),
+                                sid: question.sid,
+                                question: question.question.clone(),
+                            },
+                            answer: answer_text.to_string(),
+                        });
+                    }
+                }
+
+                Some(response)
+            })
+            .collect();
+        Ok(answers)
     }
 }
 
-impl Guest for FhirFdw {
+impl Guest for LimeFdw {
     fn host_version_requirement() -> String {
         // semver ref: https://docs.rs/semver/latest/semver/enum.Op.html
         "^0.1.0".to_string()
@@ -611,7 +301,14 @@ impl Guest for FhirFdw {
         Self::init();
         let this = Self::this_mut();
         let opts = _ctx.get_options(OptionsType::Server);
-        this.base_url = opts.require_or("fhir_url", "https://hapi.fhir.org/baseR4");
+        this.base_url = opts.require_or(
+            "limesurvey_url",
+            "https://warifatest.limesurvey.net/admin/remotecontrol",
+        );
+
+        this.username = opts.require_or("username", "mmuzny");
+
+        this.password = opts.require_or("password", "sytjix-xubFug-9hidva");
         // let api_key = match opts.get("api_key") {
         //     Some(key) => key,
         //     None => {
@@ -622,13 +319,27 @@ impl Guest for FhirFdw {
 
         this.headers
             .push(("content-type".to_owned(), "application/json".to_string()));
+
         Ok(())
     }
 
     fn begin_scan(_ctx: &Context) -> FdwResult {
         let this = Self::this_mut();
 
-        this.make_request(_ctx)?;
+        this.session_key = this.get_session_key(_ctx)?;
+        this.survey_ids = this.get_surveys(_ctx)?;
+        for sid in this.survey_ids.clone() {
+            match this.get_results(_ctx, sid) {
+                Ok(results) => this.responses.extend(results),
+                Err(e) => return Err(e),
+            }
+        }
+
+        this.total_answers_count = this
+            .responses
+            .iter()
+            .map(|response| response.answers.len())
+            .sum();
 
         this.row_cnt = 0;
 
@@ -638,32 +349,23 @@ impl Guest for FhirFdw {
     fn iter_scan(ctx: &Context, row: &Row) -> Result<Option<u32>, FdwError> {
         let this = Self::this_mut();
 
-        if this.row_cnt >= this.src_rows.len() {
-            // return 'None' to stop data scans
+        if this.row_cnt >= this.total_answers_count {
             return Ok(None);
         }
 
-        let src_row = &this.src_rows[this.row_cnt];
+        let answer = this.responses.get_mut(0).unwrap().answers.pop().unwrap();
+
         for tgt_col in ctx.get_columns() {
-            let cell = this.src_to_cell(src_row, &tgt_col)?;
+            let cell = this.answer_to_cell(&answer, &tgt_col).unwrap_or_default();
             row.push(cell.as_ref());
         }
 
-        // for tgt_col in &ctx.get_columns() {
-        //     match tgt_col.name().as_str() {
-        //         "id" => {
-        //             row.push(Some(&Cell::I64(42)));
-        //         }
-        //         "col" => {
-        //             row.push(Some(&Cell::String("Hello world".to_string())));
-        //         }
-        //         _ => unreachable!(),
-        //     }
-        // }
+        if (this.responses.get_mut(0).iter().count() == 0) {
+            this.responses.remove(0);
+        }
 
         this.row_cnt += 1;
 
-        // return Some(_) to Postgres and continue data scan
         Ok(Some(0))
     }
 
@@ -699,4 +401,4 @@ impl Guest for FhirFdw {
     }
 }
 
-bindings::export!(FhirFdw with_types_in bindings);
+bindings::export!(LimeFdw with_types_in bindings);
